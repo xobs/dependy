@@ -35,7 +35,7 @@ pub trait Dependency {
 }
 
 #[derive(Debug)]
-pub struct Dependable {
+pub struct Dependy {
     /// The graph structure, which we will iterate over.
     graph: Dag<String, DepEdge>,
 
@@ -52,9 +52,9 @@ pub struct Dependable {
     suggestions: HashMap<String, Vec<String>>,
 }
 
-impl Dependable {
-    pub fn new() -> Dependable {
-        Dependable {
+impl Dependy {
+    pub fn new() -> Dependy {
+        Dependy {
             graph: Dag::new(),
             node_bucket: HashMap::new(),
             results: HashMap::new(),
@@ -289,7 +289,7 @@ mod tests {
     }
     #[test]
     fn single_dep() {
-        let mut depgraph = Dependable::new();
+        let mut depgraph = Dependy::new();
         let d1 = SimpleDep::new("single", vec![], vec![], vec![]);
         depgraph.add_dependency(&d1);
 
@@ -300,7 +300,7 @@ mod tests {
 
     #[test]
     fn two_deps() {
-        let mut depgraph = Dependable::new();
+        let mut depgraph = Dependy::new();
         let d1 = SimpleDep::new("first", vec!["second".to_string()], vec![], vec![]);
         let d2 = SimpleDep::new("second", vec![], vec![], vec![]);
         depgraph.add_dependency(&d1);
@@ -314,7 +314,7 @@ mod tests {
 
     #[test]
     fn three_deps() {
-        let mut depgraph = Dependable::new();
+        let mut depgraph = Dependy::new();
         let d1 = SimpleDep::new("first", vec!["second".to_string()], vec![], vec![]);
         let d2 = SimpleDep::new("second", vec!["third".to_string()], vec![], vec![]);
         let d3 = SimpleDep::new("third", vec![], vec![], vec![]);
@@ -331,7 +331,7 @@ mod tests {
 
     #[test]
     fn provides() {
-        let mut depgraph = Dependable::new();
+        let mut depgraph = Dependy::new();
         let d1 = SimpleDep::new("first", vec!["deux".to_string()], vec![], vec![]);
         let d2 = SimpleDep::new("second", vec![], vec![], vec!["deux".to_string()]);
         depgraph.add_dependency(&d1);
@@ -346,7 +346,7 @@ mod tests {
 
     #[test]
     fn follows() {
-        let mut depgraph = Dependable::new();
+        let mut depgraph = Dependy::new();
         let d1 = SimpleDep::new("first", vec![], vec![], vec![]);
         let d2 = SimpleDep::new("second", vec![], vec![], vec!["deux".to_string()]);
         let d3 = SimpleDep::new("third", vec![], vec![], vec![]);
@@ -363,7 +363,7 @@ mod tests {
 
     #[test]
     fn depends_and_follows() {
-        let mut depgraph = Dependable::new();
+        let mut depgraph = Dependy::new();
         let d1 = SimpleDep::new("first", vec!["third".to_string()], vec![], vec![]);
         let d2 = SimpleDep::new("second", vec![], vec![], vec!["deux".to_string()]);
         let d3 = SimpleDep::new("third", vec![], vec![], vec![]);

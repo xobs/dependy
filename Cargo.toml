@@ -1,9 +1,9 @@
 [package]
 name = "dependy"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Sean Cross <sean@xobs.io>"]
 license = "MIT"
-respository = "https://github.com/xobs/dependy"
+repository = "https://github.com/xobs/dependy"
 description = "Dependency resolution with variable dependency types"
 
 [dependencies]
