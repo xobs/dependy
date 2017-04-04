@@ -5,6 +5,8 @@ authors = ["Sean Cross <sean@xobs.io>"]
 license = "MIT"
 repository = "https://github.com/xobs/dependy"
 description = "Dependency resolution with variable dependency types"
+keywords = ["dependency", "resolver", "graph"]
+categories = ["data-structures"]
 
 [dependencies]
 daggy = "0.4.1"
