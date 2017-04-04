@@ -1,7 +1,10 @@
 [package]
-name = "dependable"
+name = "dependy"
 version = "0.1.0"
 authors = ["Sean Cross <sean@xobs.io>"]
+license = "MIT"
+respository = "https://github.com/xobs/dependy"
+description = "Dependency resolution with variable dependency types"
 
 [dependencies]
 daggy = "0.4.1"

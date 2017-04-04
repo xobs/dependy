@@ -15,27 +15,29 @@ pub enum DepError {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
-pub enum TestEdge {
-    /// Test B Requires test A, and a failure of A prevents B from running
+pub enum DepEdge {
+    /// Dependency B Requires dependency A, and a failure of A
+    /// prevents B from running
     Requires,
 
-    /// Test B Suggests test A, and a failure of A doesn't prevent B from running
+    /// Dependency B Suggests dependency A, and a failure of A
     Suggests,
 
-    /// Test B follows test A in the .scenario file
+    /// Dependency B follows dependency A in the list
     Follows,
 }
 
 pub trait Dependency {
-    fn name(&self) -> &String;
+    fn name(&self) -> &str;
     fn requirements(&self) -> &Vec<String>;
     fn suggestions(&self) -> &Vec<String>;
     fn provides(&self) -> &Vec<String>;
 }
 
+#[derive(Debug)]
 pub struct Dependable {
     /// The graph structure, which we will iterate over.
-    graph: Dag<String, TestEdge>,
+    graph: Dag<String, DepEdge>,
 
     /// A hashmap containing all nodes in the graph, indexed by name.
     node_bucket: HashMap<String, NodeIndex>,
@@ -63,7 +65,7 @@ impl Dependable {
     }
 
     pub fn add_dependency<T: Dependency>(&mut self, dependency: &T) {
-        let name = dependency.name();
+        let name = dependency.name().to_string();
         let new_node = self.graph.add_node(name.clone());
         self.node_bucket.insert(name.clone(), new_node.clone());
 
@@ -78,15 +80,11 @@ impl Dependable {
         self.requirements.insert(name.clone(), dependency.requirements().clone());
     }
 
-    pub fn resolve_dependencies<T: Dependency>(&mut self,
-                                               dependencies: Vec<T>)
-                                               -> Result<Vec<String>, DepError> {
+    pub fn resolve_named_dependencies(&mut self,
+                                      dependencies: &Vec<String>)
+                                      -> Result<Vec<String>, DepError> {
 
-        let mut to_resolve = vec![];
-        for dep in &dependencies {
-            to_resolve.push(dep.name().clone());
-        }
-
+        let mut to_resolve = dependencies.clone();
         let mut resolved = HashMap::new();
 
         loop {
@@ -116,7 +114,7 @@ impl Dependable {
                         };
 
                         if let Err(_) = self.graph
-                            .add_edge(*edge, self.node_bucket[&dep_name], TestEdge::Requires) {
+                            .add_edge(*edge, self.node_bucket[&dep_name], DepEdge::Requires) {
                             return Err(DepError::CircularDependency(dep_name.clone(), req.clone()));
                         }
                     }
@@ -135,7 +133,7 @@ impl Dependable {
                         };
 
                         if let Err(_) = self.graph
-                            .add_edge(*edge, self.node_bucket[&dep_name], TestEdge::Requires) {
+                            .add_edge(*edge, self.node_bucket[&dep_name], DepEdge::Requires) {
                             return Err(DepError::CircularDependency(dep_name.clone(), req.clone()));
                         }
                     }
@@ -144,10 +142,10 @@ impl Dependable {
         }
 
         // Add "Follows" dependencies, if no other dependency exists.
-        let num_tests = dependencies.len();
-        for i in 1..num_tests {
-            let previous_dep = dependencies[i - 1].name().clone();
-            let this_dep = dependencies[i].name().clone();
+        let num_deps = dependencies.len();
+        for i in 1..num_deps {
+            let previous_dep = dependencies[i - 1].clone();
+            let this_dep = dependencies[i].clone();
 
             let previous_edge = match self.node_bucket.get(&previous_dep) {
                 Some(s) => s,
@@ -158,19 +156,29 @@ impl Dependable {
                 None => return Err(DepError::DependencyNotFound(this_dep, previous_dep)),
             };
             // If we get a "CircularDependency", that's fine, we just won't add this edge.
-            self.graph.add_edge(*previous_edge, *this_edge, TestEdge::Follows).ok();
+            self.graph.add_edge(*previous_edge, *this_edge, DepEdge::Follows).ok();
         }
 
-        // Sort everything into a "test order"
-        let mut test_order = vec![];
+        // Sort everything into a "dependency order"
+        let mut dep_order = vec![];
         {
             let mut seen_nodes = HashMap::new();
             // Pick a node from the bucket and visit it.  This will cause
             // all nodes in the graph to be visited, in order.
-            let some_node = self.node_bucket.get(dependencies[0].name()).unwrap().clone();
-            self.visit_node(&mut seen_nodes, &some_node, &mut test_order);
+            let some_node = self.node_bucket.get(&dependencies[0]).unwrap().clone();
+            self.visit_node(&mut seen_nodes, &some_node, &mut dep_order);
         }
-        Ok(test_order)
+        Ok(dep_order)
+    }
+
+    pub fn resolve_dependencies<T: Dependency>(&mut self,
+                                               dependencies: Vec<T>)
+                                               -> Result<Vec<String>, DepError> {
+        let mut to_resolve = vec![];
+        for dep in &dependencies {
+            to_resolve.push(dep.name().to_string());
+        }
+        self.resolve_named_dependencies(&to_resolve)
     }
 
     fn visit_node(&mut self,
@@ -208,6 +216,27 @@ impl Dependable {
         }
     }
 
+    // pub fn parents_of_named(&mut self, name: &String) -> Vec<String> {
+    // let parents = self.graph.parents(self.node_bucket[name]);
+    // let mut retval = vec![];
+    // for (parent, parent_index) in parents.iter(&self.graph) {
+    // retval.push(parent);
+    // }
+    // retval
+    // }
+    //
+    pub fn required_parents_of_named(&self, name: &String) -> Vec<&String> {
+        let parents = self.graph.parents(self.node_bucket[name]);
+        let mut retval = vec![];
+        for (edge, node) in parents.iter(&self.graph) {
+            if *(self.graph.edge_weight(edge).unwrap()) != DepEdge::Requires {
+                continue;
+            }
+            retval.push(self.graph.node_weight(node).unwrap());
+        }
+        retval
+    }
+
     pub fn mark_successful(&mut self, dep: &String) {
         self.results.insert(dep.clone(), true);
     }
@@ -231,13 +260,13 @@ mod tests {
         provides: Vec<String>,
     }
     impl SimpleDep {
-        pub fn new(name: String,
+        pub fn new(name: &str,
                    requirements: Vec<String>,
                    suggestions: Vec<String>,
                    provides: Vec<String>)
                    -> SimpleDep {
             SimpleDep {
-                name: name,
+                name: name.to_string(),
                 requirements: requirements,
                 suggestions: suggestions,
                 provides: provides,
@@ -245,8 +274,8 @@ mod tests {
         }
     }
     impl Dependency for SimpleDep {
-        fn name(&self) -> &String {
-            &self.name
+        fn name(&self) -> &str {
+            &self.name.as_str()
         }
         fn requirements(&self) -> &Vec<String> {
             &self.requirements
@@ -261,7 +290,7 @@ mod tests {
     #[test]
     fn single_dep() {
         let mut depgraph = Dependable::new();
-        let d1 = SimpleDep::new("single".to_string(), vec![], vec![], vec![]);
+        let d1 = SimpleDep::new("single", vec![], vec![], vec![]);
         depgraph.add_dependency(&d1);
 
         let dep_chain = depgraph.resolve_dependencies(vec![d1]).unwrap();
@@ -272,11 +301,8 @@ mod tests {
     #[test]
     fn two_deps() {
         let mut depgraph = Dependable::new();
-        let d1 = SimpleDep::new("first".to_string(),
-                                vec!["second".to_string()],
-                                vec![],
-                                vec![]);
-        let d2 = SimpleDep::new("second".to_string(), vec![], vec![], vec![]);
+        let d1 = SimpleDep::new("first", vec!["second".to_string()], vec![], vec![]);
+        let d2 = SimpleDep::new("second", vec![], vec![], vec![]);
         depgraph.add_dependency(&d1);
         depgraph.add_dependency(&d2);
 
@@ -289,15 +315,9 @@ mod tests {
     #[test]
     fn three_deps() {
         let mut depgraph = Dependable::new();
-        let d1 = SimpleDep::new("first".to_string(),
-                                vec!["second".to_string()],
-                                vec![],
-                                vec![]);
-        let d2 = SimpleDep::new("second".to_string(),
-                                vec!["third".to_string()],
-                                vec![],
-                                vec![]);
-        let d3 = SimpleDep::new("third".to_string(), vec![], vec![], vec![]);
+        let d1 = SimpleDep::new("first", vec!["second".to_string()], vec![], vec![]);
+        let d2 = SimpleDep::new("second", vec!["third".to_string()], vec![], vec![]);
+        let d3 = SimpleDep::new("third", vec![], vec![], vec![]);
         depgraph.add_dependency(&d1);
         depgraph.add_dependency(&d2);
         depgraph.add_dependency(&d3);
@@ -312,14 +332,8 @@ mod tests {
     #[test]
     fn provides() {
         let mut depgraph = Dependable::new();
-        let d1 = SimpleDep::new("first".to_string(),
-                                vec!["deux".to_string()],
-                                vec![],
-                                vec![]);
-        let d2 = SimpleDep::new("second".to_string(),
-                                vec![],
-                                vec![],
-                                vec!["deux".to_string()]);
+        let d1 = SimpleDep::new("first", vec!["deux".to_string()], vec![], vec![]);
+        let d2 = SimpleDep::new("second", vec![], vec![], vec!["deux".to_string()]);
         depgraph.add_dependency(&d1);
         depgraph.add_dependency(&d2);
 
@@ -333,12 +347,9 @@ mod tests {
     #[test]
     fn follows() {
         let mut depgraph = Dependable::new();
-        let d1 = SimpleDep::new("first".to_string(), vec![], vec![], vec![]);
-        let d2 = SimpleDep::new("second".to_string(),
-                                vec![],
-                                vec![],
-                                vec!["deux".to_string()]);
-        let d3 = SimpleDep::new("third".to_string(), vec![], vec![], vec![]);
+        let d1 = SimpleDep::new("first", vec![], vec![], vec![]);
+        let d2 = SimpleDep::new("second", vec![], vec![], vec!["deux".to_string()]);
+        let d3 = SimpleDep::new("third", vec![], vec![], vec![]);
         depgraph.add_dependency(&d1);
         depgraph.add_dependency(&d2);
         depgraph.add_dependency(&d3);
@@ -353,15 +364,9 @@ mod tests {
     #[test]
     fn depends_and_follows() {
         let mut depgraph = Dependable::new();
-        let d1 = SimpleDep::new("first".to_string(),
-                                vec!["third".to_string()],
-                                vec![],
-                                vec![]);
-        let d2 = SimpleDep::new("second".to_string(),
-                                vec![],
-                                vec![],
-                                vec!["deux".to_string()]);
-        let d3 = SimpleDep::new("third".to_string(), vec![], vec![], vec![]);
+        let d1 = SimpleDep::new("first", vec!["third".to_string()], vec![], vec![]);
+        let d2 = SimpleDep::new("second", vec![], vec![], vec!["deux".to_string()]);
+        let d3 = SimpleDep::new("third", vec![], vec![], vec![]);
         depgraph.add_dependency(&d1);
         depgraph.add_dependency(&d2);
         depgraph.add_dependency(&d3);
