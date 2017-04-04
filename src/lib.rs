@@ -10,7 +10,7 @@ pub enum DepError {
     RequirementNotFound(String, String),
     SuggestionsNotFound(String),
     SuggestionNotFound(String, String),
-    DependencyNotFound(String, String),
+    DependencyNotFound(String),
     CircularDependency(String, String),
 }
 
@@ -149,11 +149,11 @@ impl Dependy {
 
             let previous_edge = match self.node_bucket.get(&previous_dep) {
                 Some(s) => s,
-                None => return Err(DepError::DependencyNotFound(this_dep, previous_dep)),
+                None => return Err(DepError::DependencyNotFound(previous_dep)),
             };
             let this_edge = match self.node_bucket.get(&this_dep) {
                 Some(s) => s,
-                None => return Err(DepError::DependencyNotFound(this_dep, previous_dep)),
+                None => return Err(DepError::DependencyNotFound(this_dep)),
             };
             // If we get a "CircularDependency", that's fine, we just won't add this edge.
             self.graph.add_edge(*previous_edge, *this_edge, DepEdge::Follows).ok();
