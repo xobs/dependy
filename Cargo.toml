@@ -1,0 +1,7 @@
+[package]
+name = "dependable"
+version = "0.1.0"
+authors = ["Sean Cross <sean@xobs.io>"]
+
+[dependencies]
+daggy = "0.4.1"
