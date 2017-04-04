@@ -94,7 +94,10 @@ impl Dependy {
 
             // If this dep_name has been resolved, skip it.
             let dep_name = to_resolve.remove(0);
-            let dep_name = self.provides_map.get(&dep_name).unwrap().clone();
+            let dep_name = match self.provides_map.get(&dep_name) {
+                Some(s) => s.clone(),
+                None => return Err(DepError::DependencyNotFound(dep_name)),
+            };
             if resolved.get(&dep_name).is_some() {
                 continue;
             }
