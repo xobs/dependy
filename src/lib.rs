@@ -1,8 +1,14 @@
 extern crate daggy;
+extern crate petgraph;
 
 use self::daggy::{Dag, Walker, NodeIndex};
+use petgraph::dot::Dot;
 
 use std::collections::HashMap;
+use std::fmt;
+use std::fs::File;
+use std::io::Write;
+use std::io;
 
 #[derive(Debug)]
 pub enum DepError {
@@ -26,6 +32,15 @@ pub enum DepEdge {
     /// Dependency B follows dependency A in the list
     Follows,
 }
+impl fmt::Display for DepEdge {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &DepEdge::Requires => write!(f, "Requires"),
+            &DepEdge::Suggests => write!(f, "Suggests"),
+            &DepEdge::Follows => write!(f, "Follows"),
+        }
+    }
+}
 
 pub trait Dependency {
     fn name(&self) -> &str;
@@ -34,6 +49,27 @@ pub trait Dependency {
     fn provides(&self) -> &Vec<String>;
 }
 
+#[derive(Debug, Clone)]
+pub struct InternalDependency {
+    name: String,
+    requirements: Vec<String>,
+    suggestions: Vec<String>,
+    provides: Vec<String>,
+}
+impl Dependency for InternalDependency {
+    fn name(&self) -> &str {
+        &self.name.as_str()
+    }
+    fn requirements(&self) -> &Vec<String> {
+        &self.requirements
+    }
+    fn suggestions(&self) -> &Vec<String> {
+        &self.suggestions
+    }
+    fn provides(&self) -> &Vec<String> {
+        &self.provides
+    }
+}
 #[derive(Debug)]
 pub struct Dependy {
     /// The graph structure, which we will iterate over.
@@ -50,6 +86,9 @@ pub struct Dependy {
 
     requirements: HashMap<String, Vec<String>>,
     suggestions: HashMap<String, Vec<String>>,
+
+    /// Useed for testing, and making sure the graph is sane.
+    dep_map: HashMap<String, InternalDependency>,
 }
 
 impl Dependy {
@@ -61,6 +100,7 @@ impl Dependy {
             requirements: HashMap::new(),
             suggestions: HashMap::new(),
             provides_map: HashMap::new(),
+            dep_map: HashMap::new(),
         }
     }
 
@@ -68,6 +108,14 @@ impl Dependy {
         let name = dependency.name().to_string();
         let new_node = self.graph.add_node(name.clone());
         self.node_bucket.insert(name.clone(), new_node.clone());
+
+        let sd = InternalDependency {
+            name: dependency.name().to_string(),
+            requirements: dependency.requirements().clone(),
+            suggestions: dependency.suggestions().clone(),
+            provides: dependency.provides().clone(),
+        };
+        self.dep_map.insert(name.clone(), sd);
 
         // Also add aliases
         self.provides_map.insert(name.clone(), name.clone());
@@ -85,7 +133,6 @@ impl Dependy {
                                       -> Result<Vec<String>, DepError> {
 
         let mut to_resolve = dependencies.clone();
-        let mut resolved = HashMap::new();
 
         loop {
             if to_resolve.is_empty() {
@@ -98,10 +145,6 @@ impl Dependy {
                 Some(s) => s.clone(),
                 None => return Err(DepError::DependencyNotFound(dep_name)),
             };
-            if resolved.get(&dep_name).is_some() {
-                continue;
-            }
-            resolved.insert(dep_name.clone(), ());
 
             // Resolve all requirements.
             match self.requirements.get(&dep_name) {
@@ -109,15 +152,20 @@ impl Dependy {
                 Some(ref reqs) => {
                     for req in *reqs {
                         to_resolve.push(req.clone());
-                        let edge = match self.node_bucket.get(req) {
+                        let target = match self.node_bucket.get(req) {
                             None => {
                                 return Err(DepError::RequirementNotFound(dep_name, req.clone()))
                             }
                             Some(e) => e,
                         };
 
+                        // Don't add extra edges.
+                        if self.graph.find_edge(*target, self.node_bucket[&dep_name]).is_some() {
+                            continue;
+                        }
+
                         if let Err(_) = self.graph
-                            .add_edge(*edge, self.node_bucket[&dep_name], DepEdge::Requires) {
+                            .add_edge(*target, self.node_bucket[&dep_name], DepEdge::Requires) {
                             return Err(DepError::CircularDependency(dep_name.clone(), req.clone()));
                         }
                     }
@@ -130,13 +178,18 @@ impl Dependy {
                 Some(ref reqs) => {
                     for req in *reqs {
                         to_resolve.push(req.clone());
-                        let edge = match self.node_bucket.get(req) {
+                        let target = match self.node_bucket.get(req) {
                             None => return Err(DepError::SuggestionNotFound(dep_name, req.clone())),
                             Some(e) => e,
                         };
 
+                        // Don't add extra edges.
+                        if self.graph.find_edge(*target, self.node_bucket[&dep_name]).is_some() {
+                            continue;
+                        }
+
                         if let Err(_) = self.graph
-                            .add_edge(*edge, self.node_bucket[&dep_name], DepEdge::Requires) {
+                            .add_edge(*target, self.node_bucket[&dep_name], DepEdge::Suggests) {
                             return Err(DepError::CircularDependency(dep_name.clone(), req.clone()));
                         }
                     }
@@ -158,17 +211,24 @@ impl Dependy {
                 Some(s) => s,
                 None => return Err(DepError::DependencyNotFound(this_dep)),
             };
+
+            // Don't add a "Follows" dependency if one already exists.
+            if self.graph.find_edge(*previous_edge, *this_edge).is_some() {
+                continue;
+            }
+
             // If we get a "CircularDependency", that's fine, we just won't add this edge.
             self.graph.add_edge(*previous_edge, *this_edge, DepEdge::Follows).ok();
         }
 
         // Sort everything into a "dependency order"
         let mut dep_order = vec![];
-        {
-            let mut seen_nodes = HashMap::new();
+        let mut seen_nodes = HashMap::new();
+        for dep_name in dependencies {
+
             // Pick a node from the bucket and visit it.  This will cause
             // all nodes in the graph to be visited, in order.
-            let some_node = self.node_bucket.get(&dependencies[0]).unwrap().clone();
+            let some_node = self.node_bucket.get(dep_name).unwrap().clone();
             self.visit_node(&mut seen_nodes, &some_node, &mut dep_order);
         }
         Ok(dep_order)
@@ -182,6 +242,10 @@ impl Dependy {
             to_resolve.push(dep.name().to_string());
         }
         self.resolve_named_dependencies(&to_resolve)
+    }
+
+    pub fn save_dot(&self, output: &mut File) -> io::Result<()> {
+        write!(output, "{}", Dot::new(self.graph.graph()))
     }
 
     fn visit_node(&mut self,
@@ -208,15 +272,15 @@ impl Dependy {
         }
 
         dep_order.push(self.graph[*node].clone());
-
-        let children = self.graph.children(*node);
-        let mut to_visit = vec![];
-        for (_, child_index) in children.iter(&self.graph) {
-            to_visit.push(child_index);
-        }
-        for child_index in to_visit {
-            self.visit_node(seen_nodes, &child_index, dep_order);
-        }
+        // let children = self.graph.children(*node);
+        // let mut to_visit = vec![];
+        // for (_, child_index) in children.iter(&self.graph) {
+        // to_visit.push(child_index);
+        // }
+        // for child_index in to_visit {
+        // self.visit_node(seen_nodes, &child_index, dep_order);
+        // }
+        //
     }
 
     // pub fn parents_of_named(&mut self, name: &String) -> Vec<String> {
@@ -377,7 +441,136 @@ mod tests {
         let dep_chain = depgraph.resolve_dependencies(vec![d1, d3, d2]).unwrap();
         assert_eq!(dep_chain.len(), 3);
         assert_eq!(dep_chain[0], "third");
-        assert_eq!(dep_chain[1], "second");
-        assert_eq!(dep_chain[2], "first");
+        assert_eq!(dep_chain[1], "first");
+        assert_eq!(dep_chain[2], "second");
+    }
+
+    #[test]
+    fn complex_sequence() {
+        let mut depgraph = Dependy::new();
+        let build_ltc_os = SimpleDep::new("build-ltc-os",
+                                          vec!["checkout-ltc-os".to_string()],
+                                          vec![],
+                                          vec![]);
+        depgraph.add_dependency(&build_ltc_os);
+        let checkout_ltc_os = SimpleDep::new("checkout-ltc-os", vec![], vec![], vec![]);
+        depgraph.add_dependency(&checkout_ltc_os);
+        let connectivity_test = SimpleDep::new("connectivity-test",
+                                               vec!["serial-test".to_string()],
+                                               vec![],
+                                               vec![]);
+        depgraph.add_dependency(&connectivity_test);
+        let finish_ltc_tests = SimpleDep::new("finish-ltc-tests",
+                                              vec!["serial-test".to_string(),
+                                                   "connectivity-test".to_string(),
+                                                   "led-test".to_string(),
+                                                   "rgb-test".to_string(),
+                                                   "status-leds".to_string()],
+                                              vec![],
+                                              vec![]);
+        depgraph.add_dependency(&finish_ltc_tests);
+        let led_test = SimpleDep::new("led-test", vec!["serial-test".to_string()], vec![], vec![]);
+        depgraph.add_dependency(&led_test);
+        let mass_erase = SimpleDep::new("mass-erase", vec!["swd".to_string()], vec![], vec![]);
+        depgraph.add_dependency(&mass_erase);
+        let measure_reset_pulse = SimpleDep::new("measure-reset-pulse",
+                                                 vec!["pi-blaster".to_string()],
+                                                 vec![],
+                                                 vec![]);
+        depgraph.add_dependency(&measure_reset_pulse);
+        let pi_blaster = SimpleDep::new("pi-blaster", vec![], vec![], vec![]);
+        depgraph.add_dependency(&pi_blaster);
+        let program_app = SimpleDep::new("program-app",
+                                         vec!["finish-ltc-tests".to_string()],
+                                         vec![],
+                                         vec![]);
+        depgraph.add_dependency(&program_app);
+        let program_os_pvt1c = SimpleDep::new("program-os-pvt1c",
+                                              vec!["swd".to_string(), "mass-erase".to_string()],
+                                              vec![],
+                                              vec![]);
+        depgraph.add_dependency(&program_os_pvt1c);
+        let rgb_test = SimpleDep::new("rgb-test", vec!["serial-test".to_string()], vec![], vec![]);
+        depgraph.add_dependency(&rgb_test);
+        let serial_test = SimpleDep::new("serial-test",
+                                         vec!["upload-program".to_string()],
+                                         vec![],
+                                         vec![]);
+        depgraph.add_dependency(&serial_test);
+        let status_leds = SimpleDep::new("status-leds",
+                                         vec!["serial-test".to_string()],
+                                         vec![],
+                                         vec![]);
+        depgraph.add_dependency(&status_leds);
+        let swd = SimpleDep::new("swd",
+                                 vec!["measure-reset-pulse".to_string()],
+                                 vec![],
+                                 vec![]);
+        depgraph.add_dependency(&swd);
+        let test_setup = SimpleDep::new("test-setup",
+                                        vec!["program-os-pvt1c".to_string()],
+                                        vec![],
+                                        vec![]);
+        depgraph.add_dependency(&test_setup);
+        let upload_program = SimpleDep::new("upload-program",
+                                            vec!["program-os-pvt1c".to_string(),
+                                                 "test-setup".to_string()],
+                                            vec![],
+                                            vec![]);
+        depgraph.add_dependency(&upload_program);
+        let wait_forever = SimpleDep::new("wait-forever", vec![], vec![], vec![]);
+        depgraph.add_dependency(&wait_forever);
+
+        let dep_chain = depgraph.resolve_dependencies(vec![mass_erase,
+                                       program_os_pvt1c,
+                                       upload_program,
+                                       finish_ltc_tests,
+                                       program_app])
+            .unwrap();
+
+        {
+            let mut dotfile = File::create("./depgraph.dot").expect("Unable to open depgraph.dot");
+            depgraph.save_dot(&mut dotfile).expect("Unable to write dotfile");
+        }
+
+        println!("Resolved dep chain: {:?}", dep_chain);
+        for depname in &dep_chain {
+            validate_parents_present(&depgraph, &dep_chain, &depname);
+        }
+    }
+
+    fn index_of(vector: &Vec<String>, x: &String) -> Option<usize> {
+        for (idx, val) in vector.iter().enumerate() {
+            if val == x {
+                return Some(idx);
+            }
+        }
+        return None;
+    }
+
+    fn validate_parents_present(depgraph: &Dependy,
+                                dep_chain: &Vec<String>,
+                                depname: &String)
+                                -> bool {
+        // Get the next item from the depgraph.  It _must_ exist.
+        let item = depgraph.dep_map.get(depname).unwrap();
+        let my_index = index_of(dep_chain, depname).unwrap();
+        for req in item.requirements() {
+            assert!(dep_chain.contains(req));
+
+            let their_index = index_of(dep_chain, req).unwrap();
+            assert!(their_index < my_index);
+
+            // Validate that the requirement has all elements present.
+            validate_parents_present(depgraph, dep_chain, req);
+        }
+
+        for req in item.suggestions() {
+            assert!(dep_chain.contains(req));
+
+            // Validate that the requirement has all elements present.
+            validate_parents_present(depgraph, dep_chain, req);
+        }
+        true
     }
 }
