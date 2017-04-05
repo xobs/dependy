@@ -10,3 +10,4 @@ categories = ["data-structures"]
 
 [dependencies]
 daggy = "0.4.1"
+petgraph = "0.2.9"
