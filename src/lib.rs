@@ -7,17 +7,18 @@ use petgraph::dot::Dot;
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
+use std::hash::Hash;
 use std::io::Write;
 use std::io;
 
 #[derive(Debug)]
-pub enum DepError {
-    RequirementsNotFound(String),
-    RequirementNotFound(String, String),
-    SuggestionsNotFound(String),
-    SuggestionNotFound(String, String),
-    DependencyNotFound(String),
-    CircularDependency(String, String),
+pub enum DepError<K> where K: Clone {
+    RequirementsNotFound(K),
+    RequirementNotFound(K, K),
+    SuggestionsNotFound(K),
+    SuggestionNotFound(K, K),
+    DependencyNotFound(K),
+    CircularDependency(K, K),
 }
 
 #[derive(Copy, Clone, Debug, PartialEq)]
@@ -42,57 +43,57 @@ impl fmt::Display for DepEdge {
     }
 }
 
-pub trait Dependency {
-    fn name(&self) -> &str;
-    fn requirements(&self) -> &Vec<String>;
-    fn suggestions(&self) -> &Vec<String>;
-    fn provides(&self) -> &Vec<String>;
+pub trait Dependency<K> where K: Clone + Eq + Hash {
+    fn name(&self) -> &K;
+    fn requirements(&self) -> &Vec<K>;
+    fn suggestions(&self) -> &Vec<K>;
+    fn provides(&self) -> &Vec<K>;
 }
 
 #[derive(Debug, Clone)]
-pub struct InternalDependency {
-    name: String,
-    requirements: Vec<String>,
-    suggestions: Vec<String>,
-    provides: Vec<String>,
+pub struct InternalDependency<K> where K: Clone + Eq + Hash {
+    name: K,
+    requirements: Vec<K>,
+    suggestions: Vec<K>,
+    provides: Vec<K>,
 }
-impl Dependency for InternalDependency {
-    fn name(&self) -> &str {
-        &self.name.as_str()
+impl<K> Dependency<K> for InternalDependency<K> where K: Clone + Eq + Hash {
+    fn name(&self) -> &K {
+        &self.name
     }
-    fn requirements(&self) -> &Vec<String> {
+    fn requirements(&self) -> &Vec<K> {
         &self.requirements
     }
-    fn suggestions(&self) -> &Vec<String> {
+    fn suggestions(&self) -> &Vec<K> {
         &self.suggestions
     }
-    fn provides(&self) -> &Vec<String> {
+    fn provides(&self) -> &Vec<K> {
         &self.provides
     }
 }
 #[derive(Debug)]
-pub struct Dependy {
+pub struct Dependy<K> where K: Clone + Eq + Hash {
     /// The graph structure, which we will iterate over.
-    graph: Dag<String, DepEdge>,
+    graph: Dag<K, DepEdge>,
 
     /// A hashmap containing all nodes in the graph, indexed by name.
-    node_bucket: HashMap<String, NodeIndex>,
+    node_bucket: HashMap<K, NodeIndex>,
 
     /// Whether results were successful or not.
-    results: HashMap<String, bool>,
+    results: HashMap<K, bool>,
 
     /// A mapping of "provides" to actual names.
-    provides_map: HashMap<String, String>,
+    provides_map: HashMap<K, K>,
 
-    requirements: HashMap<String, Vec<String>>,
-    suggestions: HashMap<String, Vec<String>>,
+    requirements: HashMap<K, Vec<K>>,
+    suggestions: HashMap<K, Vec<K>>,
 
     /// Useed for testing, and making sure the graph is sane.
-    dep_map: HashMap<String, InternalDependency>,
+    dep_map: HashMap<K, InternalDependency<K>>,
 }
 
-impl Dependy {
-    pub fn new() -> Dependy {
+impl<K> Dependy<K> where K: Clone + Eq + Hash + fmt::Display {
+    pub fn new() -> Dependy<K> {
         Dependy {
             graph: Dag::new(),
             node_bucket: HashMap::new(),
@@ -104,13 +105,13 @@ impl Dependy {
         }
     }
 
-    pub fn add_dependency<T: Dependency>(&mut self, dependency: &T) {
-        let name = dependency.name().to_string();
+    pub fn add_dependency<T: Dependency<K>>(&mut self, dependency: &T) {
+        let name = dependency.name().clone();
         let new_node = self.graph.add_node(name.clone());
         self.node_bucket.insert(name.clone(), new_node.clone());
 
         let sd = InternalDependency {
-            name: dependency.name().to_string(),
+            name: dependency.name().clone(),
             requirements: dependency.requirements().clone(),
             suggestions: dependency.suggestions().clone(),
             provides: dependency.provides().clone(),
@@ -129,8 +130,8 @@ impl Dependy {
     }
 
     pub fn resolve_named_dependencies(&mut self,
-                                      dependencies: &Vec<String>)
-                                      -> Result<Vec<String>, DepError> {
+                                      dependencies: &Vec<K>)
+                                      -> Result<Vec<K>, DepError<K>> {
 
         let mut to_resolve = dependencies.clone();
 
@@ -143,7 +144,7 @@ impl Dependy {
             let dep_name = to_resolve.remove(0);
             let dep_name = match self.provides_map.get(&dep_name) {
                 Some(s) => s.clone(),
-                None => return Err(DepError::DependencyNotFound(dep_name)),
+                None => return Err(DepError::DependencyNotFound(dep_name.clone())),
             };
 
             // Resolve all requirements.
@@ -234,12 +235,12 @@ impl Dependy {
         Ok(dep_order)
     }
 
-    pub fn resolve_dependencies<T: Dependency>(&mut self,
+    pub fn resolve_dependencies<T: Dependency<K>>(&mut self,
                                                dependencies: Vec<T>)
-                                               -> Result<Vec<String>, DepError> {
+                                               -> Result<Vec<K>, DepError<K>> {
         let mut to_resolve = vec![];
         for dep in &dependencies {
-            to_resolve.push(dep.name().to_string());
+            to_resolve.push(dep.name().clone());
         }
         self.resolve_named_dependencies(&to_resolve)
     }
@@ -251,7 +252,7 @@ impl Dependy {
     fn visit_node(&mut self,
                   seen_nodes: &mut HashMap<NodeIndex, ()>,
                   node: &NodeIndex,
-                  dep_order: &mut Vec<String>) {
+                  dep_order: &mut Vec<K>) {
 
         // If this node has been seen already, don't re-visit it.
         if seen_nodes.insert(node.clone(), ()).is_some() {
@@ -292,7 +293,7 @@ impl Dependy {
     // retval
     // }
     //
-    pub fn required_parents_of_named(&self, name: &String) -> Vec<&String> {
+    pub fn required_parents_of_named(&self, name: &K) -> Vec<&K> {
         let parents = self.graph.parents(self.node_bucket[name]);
         let mut retval = vec![];
         for (edge, node) in parents.iter(&self.graph) {
@@ -304,11 +305,11 @@ impl Dependy {
         retval
     }
 
-    pub fn mark_successful(&mut self, dep: &String) {
+    pub fn mark_successful(&mut self, dep: &K) {
         self.results.insert(dep.clone(), true);
     }
 
-    pub fn mark_failure(&mut self, dep: &String) {
+    pub fn mark_failure(&mut self, dep: &K) {
         self.results.insert(dep.clone(), false);
     }
 
@@ -333,16 +334,16 @@ mod tests {
                    provides: Vec<String>)
                    -> SimpleDep {
             SimpleDep {
-                name: name.to_string(),
+                name: name.to_owned(),
                 requirements: requirements,
                 suggestions: suggestions,
                 provides: provides,
             }
         }
     }
-    impl Dependency for SimpleDep {
-        fn name(&self) -> &str {
-            &self.name.as_str()
+    impl Dependency<String> for SimpleDep {
+        fn name(&self) -> &String {
+            &self.name
         }
         fn requirements(&self) -> &Vec<String> {
             &self.requirements
@@ -548,7 +549,7 @@ mod tests {
         return None;
     }
 
-    fn validate_parents_present(depgraph: &Dependy,
+    fn validate_parents_present(depgraph: &Dependy<String>,
                                 dep_chain: &Vec<String>,
                                 depname: &String)
                                 -> bool {
