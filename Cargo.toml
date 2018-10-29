@@ -1,6 +1,6 @@
 [package]
 name = "dependy"
-version = "0.4.0"
+version = "0.4.1"
 authors = ["Sean Cross <sean@xobs.io>"]
 license = "MIT"
 repository = "https://github.com/xobs/dependy"
