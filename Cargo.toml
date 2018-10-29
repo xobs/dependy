@@ -9,5 +9,5 @@ keywords = ["dependency", "resolver", "graph"]
 categories = ["data-structures"]
 
 [dependencies]
-daggy = "0.5.0"
-petgraph = "0.4.10"
+daggy = "0.6"
+petgraph = "0.4"
